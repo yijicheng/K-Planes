@@ -582,6 +582,7 @@ class VolumetricSampler(Sampler):
         far_plane: Optional[float] = None,
         alpha_thre: float = 0.01,
         cone_angle: float = 0.0,
+        timestamps: Optional[torch.Tensor] = None,
     ) -> Tuple[RaySamples, torch.Tensor]:
         """Generate ray samples in a bounding box.
 
@@ -601,8 +602,6 @@ class VolumetricSampler(Sampler):
 
         rays_o = ray_bundle.origins.contiguous()
         rays_d = ray_bundle.directions.contiguous()
-        # times = ray_bundle.times
-        times = None # for static
 
         if ray_bundle.nears is not None and ray_bundle.fars is not None:
             t_min = ray_bundle.nears.contiguous().reshape(-1)
@@ -624,7 +623,7 @@ class VolumetricSampler(Sampler):
             rays_d=rays_d,
             t_min=t_min,
             t_max=t_max,
-            sigma_fn=self.get_sigma_fn(rays_o, rays_d, times),
+            sigma_fn=self.get_sigma_fn(rays_o, rays_d, timestamps),
             render_step_size=render_step_size,
             near_plane=near_plane,
             far_plane=far_plane,

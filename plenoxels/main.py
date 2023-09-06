@@ -69,6 +69,9 @@ def init_trainer(model_type: str, **kwargs):
     elif model_type == "phototourism":
         from plenoxels.runners import phototourism_trainer
         return phototourism_trainer.PhototourismTrainer(**kwargs)
+    elif model_type == "ngp":
+        from plenoxels.runners import static_trainer_ngp
+        return static_trainer_ngp.StaticTrainer(**kwargs)
     else:
         from plenoxels.runners import static_trainer
         return static_trainer.StaticTrainer(**kwargs)
@@ -122,6 +125,8 @@ def main():
         model_type = "video"
     elif "appearance_embedding_dim" in config:
         model_type = "phototourism"
+    elif "ngp" in config:
+        model_type = "ngp"
     else:
         model_type = "static"
     validate_only = args.validate_only

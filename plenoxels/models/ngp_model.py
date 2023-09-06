@@ -6,8 +6,7 @@ import torch.nn as nn
 from torch.nn import Parameter
 import nerfacc
 
-from plenoxels.models.density_fields import KPlaneDensityField
-from plenoxels.models.kplane_field import KPlaneField
+from plenoxels.models.kplane_field_ngp import KPlaneField
 from plenoxels.ops.activations import init_density_activation
 from plenoxels.raymarching.ray_samplers import (
     VolumetricSampler, RayBundle, RaySamples
@@ -47,6 +46,8 @@ class NGPModel(nn.Module):
                  # occupancy grid sampling arguments
                  render_step: int = 1024,
                  render_step_size: float = None,
+                 grid_resolution: int = 128,
+                 grid_levels: int = 4,
                  alpha_thre: float = 0.0, # Threshold for opacity skipping.
                  cone_angle: float = 0.0, # Should be set to 0.0 for blender scenes but 1./256 for real scenes.
                  # appearance embedding (phototourism)
@@ -71,8 +72,8 @@ class NGPModel(nn.Module):
 
         self.render_step = render_step
         self.render_step_size = render_step_size
-        self.near_plane = near_plane
-        self.far_plane = far_plane
+        self.grid_resolution = grid_resolution
+        self.grid_levels = grid_levels
         self.alpha_thre = alpha_thre
         self.cone_angle = cone_angle
 
@@ -103,8 +104,8 @@ class NGPModel(nn.Module):
             self.render_step_size = ((self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2).sum().sqrt().item() / self.render_step # type: ignore
         self.occupancy_grid = nerfacc.OccGridEstimator(
             roi_aabb=self.scene_aabb,
-            resolution=self.config.grid_resolution,
-            levels=self.config.grid_levels,
+            resolution=self.grid_resolution,
+            levels=self.grid_levels,
         )
 
         # Sampler
@@ -113,70 +114,14 @@ class NGPModel(nn.Module):
             density_fn=self.field.density_fn,
         )
 
-        # # Initialize proposal-sampling nets
-        # self.density_fns = []
-        # self.num_proposal_iterations = num_proposal_iterations
-        # self.proposal_net_args_list = proposal_net_args_list
-        # self.proposal_warmup = proposal_warmup
-        # self.proposal_update_every = proposal_update_every
-        # self.use_proposal_weight_anneal = use_proposal_weight_anneal
-        # self.proposal_weights_anneal_max_num_iters = proposal_weights_anneal_max_num_iters
-        # self.proposal_weights_anneal_slope = proposal_weights_anneal_slope
-        # self.proposal_networks = torch.nn.ModuleList()
-        # if use_same_proposal_network:
-        #     assert len(self.proposal_net_args_list) == 1, "Only one proposal network is allowed."
-        #     prop_net_args = self.proposal_net_args_list[0]
-        #     network = KPlaneDensityField(
-        #         aabb, spatial_distortion=self.spatial_distortion,
-        #         density_activation=self.density_act, linear_decoder=self.linear_decoder, **prop_net_args)
-        #     self.proposal_networks.append(network)
-        #     self.density_fns.extend([network.get_density for _ in range(self.num_proposal_iterations)])
-        # else:
-        #     for i in range(self.num_proposal_iterations):
-        #         prop_net_args = self.proposal_net_args_list[min(i, len(self.proposal_net_args_list) - 1)]
-        #         network = KPlaneDensityField(
-        #             aabb, spatial_distortion=self.spatial_distortion,
-        #             density_activation=self.density_act, linear_decoder=self.linear_decoder, **prop_net_args,
-        #         )
-        #         self.proposal_networks.append(network)
-        #     self.density_fns.extend([network.get_density for network in self.proposal_networks])
-
-        # update_schedule = lambda step: np.clip(
-        #     np.interp(step, [0, self.proposal_warmup], [0, self.proposal_update_every]),
-        #     1,
-        #     self.proposal_update_every,
-        # )
-        # if self.is_contracted or self.is_ndc:
-        #     initial_sampler = UniformLinDispPiecewiseSampler(single_jitter=single_jitter)
-        # else:
-        #     initial_sampler = UniformSampler(single_jitter=single_jitter)
-        # self.proposal_sampler = ProposalNetworkSampler(
-        #     num_nerf_samples_per_ray=num_samples,
-        #     num_proposal_samples_per_ray=num_proposal_samples,
-        #     num_proposal_network_iterations=self.num_proposal_iterations,
-        #     single_jitter=single_jitter,
-        #     update_sched=update_schedule,
-        #     initial_sampler=initial_sampler
-        # )
-
     def step_before_iter(self, step):
         self.occupancy_grid.update_every_n_steps(
             step=step,
-            occ_eval_fn=lambda x: self.field.density_fn(x) * self.config.render_step_size,
+            occ_eval_fn=lambda x: self.field.density_fn(x) * self.render_step_size,
         )
-        # if self.use_proposal_weight_anneal:
-        #     # anneal the weights of the proposal network before doing PDF sampling
-        #     N = self.proposal_weights_anneal_max_num_iters
-        #     # https://arxiv.org/pdf/2111.12077.pdf eq. 18
-        #     train_frac = np.clip(step / N, 0, 1)
-        #     bias = lambda x, b: (b * x) / ((b - 1) * x + 1)
-        #     anneal = bias(train_frac, self.proposal_weights_anneal_slope)
-        #     self.proposal_sampler.set_anneal(anneal)
 
     def step_after_iter(self, step):
         pass
-        # if self.use_proposal_weight_anneal:
-        #     self.proposal_sampler.step_cb(step)
 
     @staticmethod
     def render_rgb(rgb: torch.Tensor, weights: torch.Tensor, bg_color: Optional[torch.Tensor], ray_indices: Optional[torch.Tensor] = None, num_rays: Optional[int] = None):
@@ -256,9 +201,10 @@ class NGPModel(nn.Module):
                 render_step_size=self.render_step_size,
                 alpha_thre=self.alpha_thre,
                 cone_angle=self.cone_angle,
+                timestamps=timestamps,
             )
 
-        field_out = self.field(ray_samples.get_positions(), ray_bundle.directions, timestamps)
+        field_out = self.field(ray_samples.get_positions(), ray_samples.directions, timestamps)
         rgb, density = field_out["rgb"], field_out["density"]
 
         # weights = ray_samples.get_weights(density)
