@@ -5,6 +5,7 @@ config = {
 
  'data_downsample': 1.0,
  'data_dirs': ['/mnt/blob2/render_output_hd/_Alicia_Brown_7BJIB/'],
+ 'num_subjects': 8,
  'contract': False,
  'ndc': False,
  'savedir': './logs/rodin/triplane',
@@ -13,10 +14,15 @@ config = {
 
  # Optimization settings
  'num_steps': 30001,
+ 'num_epochs': 30,
  'batch_size': 4096,
+ 'finetune_mlp': True,
  'optim_type': 'adam',
  'scheduler_type': 'warmup_cosine',
- 'lr': 0.01,
+ 'lr': 0.0002,
+ 'optim_type_triplane': 'adam',
+ 'scheduler_type_triplane': 'warmup_cosine',
+ 'lr_triplane': 0.003,
 
  # Regularization
  'plane_tv_weight': 0.0001,
@@ -44,8 +50,8 @@ config = {
 #  ],
 
  # Model settings
- 'ngp': True,
- 'multiscale_res': [1, 2, 4],
+ 'ngp_subject': True,
+ 'multiscale_res': [1],
  'density_activation': 'trunc_exp',
  'concat_features_across_scales': True,
  'linear_decoder': False,
@@ -53,6 +59,6 @@ config = {
    'grid_dimensions': 2,
    'input_coordinate_dim': 3,
    'output_coordinate_dim': 32,
-   'resolution': [128, 128, 128]
+   'resolution': [512, 512, 512]
  }],
 }

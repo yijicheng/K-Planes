@@ -45,7 +45,8 @@ class RodinSubjectDataset(Dataset):
         self.downsample = downsample
         self.near_far = [2.0, 6.0]
         self.scene_bbox = get_360_bbox(datadir, is_contracted=False)
-
+        self.is_ndc = False
+        self.is_contracted = False
 
         if num_subjects is not None:
             self.num_samples = num_subjects
@@ -167,7 +168,7 @@ class RodinSubjectDataset(Dataset):
         # image processing
         pixels = out["imgs"]
         if self.split == 'train':
-            bg_color = torch.rand((1, 3), dtype=pixels.dtype, device=pixels.device)
+            bg_color = torch.rand((1, 3), dtype=pixels.dtype, device=pixels.device) # TODO: [max_frames, 3]
         else:
             if pixels is None:
                 bg_color = torch.ones((1, 3), dtype=torch.float32, device='cuda:0')
