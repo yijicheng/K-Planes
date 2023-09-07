@@ -2,6 +2,7 @@ from typing import Tuple, Optional, Dict, Any, List
 import logging as log
 import os
 import resource
+import json
 
 import torch
 from torch.multiprocessing import Pool
@@ -127,6 +128,45 @@ def _parallel_loader_video(args):
     return _load_video_1cam(**args)
 
 
+def _load_rodin_image_pose(idx: int,
+                          frame_ids: List[Dict[str, Any]],
+                          data_dir: str,
+                          out_h: Optional[int],
+                          out_w: Optional[int],
+                          downsample: float,
+                          ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    # Fix file-path
+    f_path = os.path.join(data_dir, f"img_proc_fg_{frame_ids[idx]:06}.png")
+    if '.' not in os.path.basename(f_path):
+        f_path += '.png'  # so silly...
+    if not os.path.exists(f_path):  # there are non-exist paths in fox...
+        return None
+    img = Image.open(f_path)
+    if out_h is None:
+        out_h = int(img.size[0] / downsample)
+    if out_w is None:
+        out_w = int(img.size[1] / downsample)
+    # Now we should downsample to out_h, out_w and low-pass filter to resolution * 2.
+    # We only do the low-pass filtering if resolution * 2 is lower-res than out_h, out_w
+    if out_h != out_w:
+        log.warning("360 non-square")
+    img = img.resize((out_w, out_h), Image.LANCZOS)
+    img = pil2tensor(img)  # [C, H, W]
+    img = img.permute(1, 2, 0)  # [H, W, C]
+
+    with open(os.path.join(data_dir, f"metadata_{frame_ids[idx]:06}.json"), 'r') as f:
+        meta = json.load(f)['cameras'][0]
+        pose = torch.tensor(meta['transformation'], dtype=torch.float32)
+        pose[..., 3] /= 23.
+
+    return (img, pose)
+
+
+def _parallel_loader_rodin_image_pose(args):
+    torch.set_num_threads(1)
+    return _load_rodin_image_pose(**args)
+
+
 def parallel_load_images(tqdm_title,
                          dset_type: str,
                          num_images: int,
@@ -142,6 +182,8 @@ def parallel_load_images(tqdm_title,
         fn = _parallel_loader_video
         # giac: Can increase to e.g. 10 if loading 4x subsampled images. Otherwise OOM.
         max_threads = 8
+    elif dset_type == 'rodin' or dset_type == 'rodin_subject':
+        fn = _parallel_loader_rodin_image_pose
     else:
         raise ValueError(dset_type)
     p = Pool(min(max_threads, num_images))

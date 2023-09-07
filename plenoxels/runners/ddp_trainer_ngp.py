@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from plenoxels.utils.timer import CudaTimer
 from plenoxels.utils.ema import EMA
-from plenoxels.models.lowrank_model import LowrankModel
+from plenoxels.models.ngp_model import NGPModel
 from plenoxels.utils.my_tqdm import tqdm
 from plenoxels.ops.image import metrics
 from plenoxels.ops.image.io import write_png
@@ -138,41 +138,40 @@ class BaseTrainer(abc.ABC):
         if self.global_step is None:
             self.global_step = 0
         log.info(f"Starting training from step {self.global_step + 1}")
-        for epoch in range(self.epochs):
-            pb = tqdm(initial=self.global_step, total=self.num_steps)
-            try:
-                self.pre_epoch()
-                batch_iter = iter(self.train_data_loader)
-                while self.global_step < self.num_steps:
-                    self.timer.reset()
-                    self.model.step_before_iter(self.global_step)
-                    self.global_step += 1
-                    self.timer.check("step-before-iter")
-                    try:
-                        data = next(batch_iter)
-                        self.timer.check("dloader-next")
-                    except StopIteration:
-                        self.pre_epoch()
-                        batch_iter = iter(self.train_data_loader)
-                        data = next(batch_iter)
-                        log.info("Reset data-iterator")
+        pb = tqdm(initial=self.global_step, total=self.num_steps)
+        try:
+            self.pre_epoch()
+            batch_iter = iter(self.train_data_loader)
+            while self.global_step < self.num_steps:
+                self.timer.reset()
+                self.model.step_before_iter(self.global_step)
+                self.global_step += 1
+                self.timer.check("step-before-iter")
+                try:
+                    data = next(batch_iter)
+                    self.timer.check("dloader-next")
+                except StopIteration:
+                    self.pre_epoch()
+                    batch_iter = iter(self.train_data_loader)
+                    data = next(batch_iter)
+                    log.info("Reset data-iterator")
 
-                    try:
-                        step_successful = self.train_step(data)
-                    except StopIteration:
-                        self.pre_epoch()
-                        batch_iter = iter(self.train_data_loader)
-                        log.info("Reset data-iterator")
-                        step_successful = True
+                try:
+                    step_successful = self.train_step(data)
+                except StopIteration:
+                    self.pre_epoch()
+                    batch_iter = iter(self.train_data_loader)
+                    log.info("Reset data-iterator")
+                    step_successful = True
 
-                    if step_successful and self.scheduler is not None:
-                        self.scheduler.step()
-                    for r in self.regularizers:
-                        r.step(self.global_step)
-                    self.post_step(progress_bar=pb)
-                    self.timer.check("after-step")
-            finally:
-                pb.close()
+                if step_successful and self.scheduler is not None:
+                    self.scheduler.step()
+                for r in self.regularizers:
+                    r.step(self.global_step)
+                self.post_step(progress_bar=pb)
+                self.timer.check("after-step")
+        finally:
+            pb.close()
             self.writer.close()
 
     def _move_data_to_device(self, data):
@@ -411,8 +410,8 @@ def init_dloader_random(_):
 
 def initialize_model(
         runner: Union['StaticTrainer', 'PhototourismTrainer', 'VideoTrainer'],
-        **kwargs) -> LowrankModel:
-    """Initialize a `LowrankModel` according to the **kwargs parameters.
+        **kwargs) -> NGPModel:
+    """Initialize a `NGPModel` according to the **kwargs parameters.
 
     Args:
         runner: The runner object which will hold the model.
@@ -420,7 +419,7 @@ def initialize_model(
         **kwargs: Extra parameters to pass to the model
 
     Returns:
-        Initialized LowrankModel.
+        Initialized NGPModel.
     """
     from .phototourism_trainer import PhototourismTrainer
     extra_args = copy(kwargs)
@@ -448,7 +447,7 @@ def initialize_model(
             num_images = runner.test_dataset.num_images
         except AttributeError:
             num_images = None
-    model = LowrankModel(
+    model = NGPModel(
         grid_config=extra_args.pop("grid_config"),
         aabb=dset.scene_bbox,
         is_ndc=dset.is_ndc,

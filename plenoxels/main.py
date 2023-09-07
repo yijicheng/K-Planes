@@ -32,6 +32,7 @@ import torch.utils.data
 from plenoxels.runners import video_trainer
 from plenoxels.runners import phototourism_trainer
 from plenoxels.runners import static_trainer
+from plenoxels.runners import static_trainer_ngp
 from plenoxels.utils.create_rendering import render_to_path, decompose_space_time
 from plenoxels.utils.parse_args import parse_optfloat
 
@@ -56,6 +57,16 @@ def load_data(model_type: str, data_downsample, data_dirs, validate_only: bool, 
             data_downsample, data_dirs, validate_only=validate_only,
             render_only=render_only, **kwargs
         )
+    elif model_type == "ngp":
+        return static_trainer_ngp.load_data(
+            data_downsample, data_dirs, validate_only=validate_only,
+            render_only=render_only, **kwargs
+        )
+    # elif model_type == "ngp_multiple":
+    #     return phototourism_trainer.load_data(
+    #         data_downsample, data_dirs, validate_only=validate_only,
+    #         render_only=render_only, **kwargs
+        # )
     else:
         return static_trainer.load_data(
             data_downsample, data_dirs, validate_only=validate_only,
@@ -72,6 +83,9 @@ def init_trainer(model_type: str, **kwargs):
     elif model_type == "ngp":
         from plenoxels.runners import static_trainer_ngp
         return static_trainer_ngp.StaticTrainer(**kwargs)
+    # elif model_type == "ngp_multiple":
+    #     from plenoxels.runners import multiple_trainer_ngp
+    #     return multiple_trainer_ngp.StaticTrainer(**kwargs)
     else:
         from plenoxels.runners import static_trainer
         return static_trainer.StaticTrainer(**kwargs)

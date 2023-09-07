@@ -13,33 +13,23 @@ from .intrinsics import Intrinsics
 from .base_dataset import BaseDataset
 
 
-class RodinfDataset(BaseDataset):
+class RodinDataset(BaseDataset):
     def __init__(self,
                  datadir,
                  split: str,
-                 rootdir: str,
                  savedir: str,
                  batch_size: Optional[int] = None,
                  downsample: float = 1.0,
                  max_frames: Optional[int] = None):
+        self.name = os.path.basename(datadir)
+        self.savedir = savedir
         self.downsample = downsample
         self.max_frames = max_frames
         self.near_far = [2.0, 6.0]
-        self.root_dir = rootdir
-        self.save_dir = savedir
-
-        shard=MPI.COMM_WORLD.Get_rank()
- 
-        num_shards=MPI.COMM_WORLD.Get_size()
-        with open(self.root_dir, 'r') as f:
-            all_files = f.read().splitlines()  #[15000:16000]
-
-        self.all_ids = all_files[shard:][::num_shards]
-        log.info(len(self.all_ids))
 
         if split == 'render':
-            frames, transform = load_360_frames(datadir, 'test', self.max_frames)
-            imgs, poses = load_360_images(frames, datadir, 'test', self.downsample)
+            frame_ids, transform = load_360_frames(datadir, 'test', self.max_frames)
+            imgs, poses = load_360_images(frame_ids, datadir, 'test', self.downsample)
             render_poses = generate_hemispherical_orbit(poses, n_frames=120)
             self.poses = render_poses
             intrinsics = load_360_intrinsics(
@@ -47,8 +37,8 @@ class RodinfDataset(BaseDataset):
                 downsample=self.downsample)
             imgs = None
         else:
-            frames, transform = load_360_frames(datadir, split, self.max_frames)
-            imgs, poses = load_360_images(frames, datadir, split, self.downsample)
+            frame_ids, transform = load_360_frames(datadir, split, self.max_frames)
+            imgs, poses = load_360_images(frame_ids, datadir, split, self.downsample)
             intrinsics = load_360_intrinsics(
                 transform, img_h=imgs[0].shape[0], img_w=imgs[0].shape[1],
                 downsample=self.downsample)
@@ -91,28 +81,22 @@ class RodinfDataset(BaseDataset):
 
 
         # triplane
-        triplane_path = os.path.join(self.save_dir, self.all_ids[index]+'.npy')
+        triplane_path = os.path.join(self.savedir, self.name + '.npy')
         if os.path.exists(triplane_path):
             with open(triplane_path, 'rb') as f:
                 triplane = np.load(f)
                 triplane = torch.as_tensor(triplane)
         else:
-            triplane = 0.1*torch.randn((1, 3* 32* 512* 512))
+            triplane = 0.1 * torch.randn((1, 3 * 32 * 512 * 512))
 
-
-        triplane_save_path = os.path.join(self.save_dir, self.all_ids[index]+'.npy')
+        triplane_save_path = os.path.join(self.savedir, self.name + '.npy')
         out["triplane"] = triplane
         out["triplane_save_path"] = triplane_save_path
         return out
 
 
 def get_360_bbox(datadir, is_contracted=False):
-    if is_contracted:
-        radius = 2
-    elif "ship" in datadir:
-        radius = 1.5
-    else:
-        radius = 1.3
+    radius = 1.5
     return torch.tensor([[-radius, -radius, -radius], [radius, radius, radius]])
 
 
@@ -144,30 +128,26 @@ def create_360_rays(
 
 
 def load_360_frames(datadir, split, max_frames: int) -> Tuple[Any, Any]:
-    with open(os.path.join(datadir, f"transforms_{split}.json"), 'r') as f:
-        meta = json.load(f)
-        frames = meta['frames']
+    with open(os.path.join(datadir, f"metadata_000000.json"), 'r') as f:
+        meta = json.load(f)['cameras'][0]
+        # frames = meta['frames']
 
         # Subsample frames
-        tot_frames = len(frames)
-        num_frames = min(tot_frames, max_frames or tot_frames)
-        if split == 'train' or split == 'test':
-            subsample = int(round(tot_frames / num_frames))
-            frame_ids = np.arange(tot_frames)[::subsample]
-            if subsample > 1:
-                log.info(f"Subsampling {split} set to 1 every {subsample} images.")
+        if split == 'train':
+            frame_ids = np.arange(300-max_frames, max_frames)
+        elif split == 'test':
+            frame_ids = np.arange(max_frames)
         else:
-            frame_ids = np.arange(num_frames)
-        frames = np.take(frames, frame_ids).tolist()
-    return frames, meta
+            frame_ids = np.arange(300)
+    return frame_ids, meta
 
 
-def load_360_images(frames, datadir, split, downsample) -> Tuple[torch.Tensor, torch.Tensor]:
+def load_360_images(frame_ids, datadir, split, downsample) -> Tuple[torch.Tensor, torch.Tensor]:
     img_poses = parallel_load_images(
-        dset_type="synthetic",
+        dset_type="rodin",
         tqdm_title=f'Loading {split} data',
-        num_images=len(frames),
-        frames=frames,
+        num_images=len(frame_ids),
+        frame_ids=frame_ids,
         data_dir=datadir,
         out_h=None,
         out_w=None,
@@ -183,20 +163,12 @@ def load_360_intrinsics(transform, img_h, img_w, downsample) -> Intrinsics:
     height = img_h
     width = img_w
     # load intrinsics
-    if 'fl_x' in transform or 'fl_y' in transform:
-        fl_x = (transform['fl_x'] if 'fl_x' in transform else transform['fl_y']) / downsample
-        fl_y = (transform['fl_y'] if 'fl_y' in transform else transform['fl_x']) / downsample
-    elif 'camera_angle_x' in transform or 'camera_angle_y' in transform:
-        # blender, assert in radians. already downscaled since we use H/W
-        fl_x = width / (2 * np.tan(transform['camera_angle_x'] / 2)) if 'camera_angle_x' in transform else None
-        fl_y = height / (2 * np.tan(transform['camera_angle_y'] / 2)) if 'camera_angle_y' in transform else None
-        if fl_x is None:
-            fl_x = fl_y
-        if fl_y is None:
-            fl_y = fl_x
+    if 'focal_length' in transform and 'sensor_width' in transform:
+        fl_x = transform['focal_length'] / transform['sensor_width'] * width
+        fl_y = transform['focal_length'] / transform['sensor_width'] * height
     else:
         raise RuntimeError('Failed to load focal length, please check the transforms.json!')
 
-    cx = (transform['cx'] / downsample) if 'cx' in transform else (width / 2)
-    cy = (transform['cy'] / downsample) if 'cy' in transform else (height / 2)
+    cx = width / 2
+    cy = height / 2
     return Intrinsics(height=height, width=width, focal_x=fl_x, focal_y=fl_y, center_x=cx, center_y=cy)

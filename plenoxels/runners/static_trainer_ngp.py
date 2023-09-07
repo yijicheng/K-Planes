@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 import torch.utils.data
 
-from plenoxels.datasets import SyntheticNerfDataset, LLFFDataset
+from plenoxels.datasets import SyntheticNerfDataset, LLFFDataset, RodinDataset
 from plenoxels.models.ngp_model import NGPModel
 from plenoxels.utils.ema import EMA
 from plenoxels.utils.my_tqdm import tqdm
@@ -148,6 +148,8 @@ def decide_dset_type(dd) -> str:
           or "horns" in dd or "leaves" in dd or "orchids" in dd
           or "room" in dd or "trex" in dd):
         return "llff"
+    elif ("render" in dd and not "subject" in dd):
+        return "rodin"
     else:
         raise RuntimeError(f"data_dir {dd} not recognized as LLFF or Synthetic dataset.")
 
@@ -169,6 +171,11 @@ def init_tr_data(data_downsample: float, data_dirs: Sequence[str], **kwargs):
             data_dir, split='train', downsample=int(data_downsample), hold_every=hold_every,
             batch_size=batch_size, contraction=kwargs['contract'], ndc=kwargs['ndc'],
             ndc_far=float(kwargs['ndc_far']), near_scaling=float(kwargs['near_scaling']))
+    elif dset_type == "rodin":
+        max_tr_frames = parse_optint(kwargs.get('max_tr_frames'))
+        dset = RodinDataset(
+            data_dir, split='train', savedir=kwargs['savedir'], downsample=data_downsample,
+            max_frames=max_tr_frames, batch_size=batch_size)
     else:
         raise ValueError(f"Dataset type {dset_type} invalid.")
     dset.reset_iter()
@@ -197,6 +204,11 @@ def init_ts_data(data_dirs: Sequence[str], split: str, **kwargs):
             data_dir, split=split, downsample=4, hold_every=hold_every,
             contraction=kwargs['contract'], ndc=kwargs['ndc'],
             ndc_far=float(kwargs['ndc_far']), near_scaling=float(kwargs['near_scaling']))
+    elif dset_type == "rodin":
+        max_ts_frames = parse_optint(kwargs.get('max_ts_frames'))
+        dset = RodinDataset(
+            data_dir, split=split, savedir=kwargs['savedir'],
+            downsample=1, max_frames=max_ts_frames)
     else:
         raise ValueError(f"Dataset type {dset_type} invalid.")
     return {"ts_dset": dset}
