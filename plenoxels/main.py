@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 import tempfile
 
 import numpy as np
-
+from .utils.dist_util import setup_dist
 
 def get_freer_gpu():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -33,6 +33,7 @@ from plenoxels.runners import video_trainer
 from plenoxels.runners import phototourism_trainer
 from plenoxels.runners import static_trainer
 from plenoxels.runners import static_trainer_ngp
+from plenoxels.runners import subject_trainer_ngp
 from plenoxels.utils.create_rendering import render_to_path, decompose_space_time
 from plenoxels.utils.parse_args import parse_optfloat
 
@@ -62,11 +63,11 @@ def load_data(model_type: str, data_downsample, data_dirs, validate_only: bool, 
             data_downsample, data_dirs, validate_only=validate_only,
             render_only=render_only, **kwargs
         )
-    # elif model_type == "ngp_multiple":
-    #     return phototourism_trainer.load_data(
-    #         data_downsample, data_dirs, validate_only=validate_only,
-    #         render_only=render_only, **kwargs
-        # )
+    elif model_type == "ngp_subject":
+        return subject_trainer_ngp.load_data(
+            data_downsample, data_dirs, validate_only=validate_only,
+            render_only=render_only, **kwargs
+        )
     else:
         return static_trainer.load_data(
             data_downsample, data_dirs, validate_only=validate_only,
@@ -83,9 +84,9 @@ def init_trainer(model_type: str, **kwargs):
     elif model_type == "ngp":
         from plenoxels.runners import static_trainer_ngp
         return static_trainer_ngp.StaticTrainer(**kwargs)
-    # elif model_type == "ngp_multiple":
-    #     from plenoxels.runners import multiple_trainer_ngp
-    #     return multiple_trainer_ngp.StaticTrainer(**kwargs)
+    elif model_type == "ngp_subject":
+        from plenoxels.runners import subject_trainer_ngp
+        return subject_trainer_ngp.StaticTrainer(**kwargs)
     else:
         from plenoxels.runners import static_trainer
         return static_trainer.StaticTrainer(**kwargs)
@@ -114,6 +115,7 @@ def main():
     p.add_argument('--config-path', type=str, required=True)
     p.add_argument('--log-dir', type=str, default=None)
     p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--ddp', type=int, default=0)
     p.add_argument('override', nargs=argparse.REMAINDER)
 
     args = p.parse_args()
@@ -141,6 +143,8 @@ def main():
         model_type = "phototourism"
     elif "ngp" in config:
         model_type = "ngp"
+    elif "ngp_subject" in config:
+        model_type = "ngp_subject"
     else:
         model_type = "static"
     validate_only = args.validate_only
@@ -158,6 +162,9 @@ def main():
         assert args.log_dir is not None and os.path.isdir(args.log_dir)
     else:
         save_config(config)
+
+    if args.ddp == 1:
+        setup_dist() 
 
     data = load_data(model_type, validate_only=validate_only, render_only=render_only or spacetime_only, **config)
     config.update(data)

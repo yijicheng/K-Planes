@@ -75,14 +75,17 @@ class BaseTrainer(abc.ABC):
         self.gscaler = torch.cuda.amp.GradScaler(enabled=self.train_fp16)
 
         self.model.to(self.device)
-        self._model = DDP(
-            self._model,
-            device_ids=[self.device],
-            output_device=self.device,
-            broadcast_buffers=False,
-            bucket_cap_mb=128,
-            find_unused_parameters=False,
-        )
+        try:
+            self._model = DDP(
+                self._model,
+                device_ids=[self.device],
+                output_device=self.device,
+                broadcast_buffers=False,
+                bucket_cap_mb=128,
+                find_unused_parameters=False,
+            )
+        except:
+            pass
 
     @property
     def model(self):

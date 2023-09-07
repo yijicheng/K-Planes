@@ -180,6 +180,7 @@ class RodinSubjectDataset(Dataset):
         out["imgs"] = pixels
         out["bg_color"] = bg_color
         out["near_fars"] = torch.tensor([self.near_far])
+        out["scene_bbox"] = self.scene_bbox.unsqueeze(0)
 
         if return_idxs:
             return out, index

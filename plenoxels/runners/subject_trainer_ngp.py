@@ -1,5 +1,6 @@
 import math
 import os
+from copy import copy
 import logging as log
 from collections import defaultdict
 from typing import Dict, MutableMapping, Union, Sequence, Any, Optional
@@ -8,13 +9,14 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.utils.data
+from torch.utils.data import Dataset
 
 from plenoxels.datasets import SyntheticNerfDataset, LLFFDataset, RodinSubjectDataset
 from plenoxels.models.ngp_model_subject import NGPModel
 from plenoxels.utils.ema import EMA
 from plenoxels.utils.my_tqdm import tqdm
 from plenoxels.utils.parse_args import parse_optint
-from .base_trainer_ngp import BaseTrainer, init_dloader_random
+from .ddp_trainer_ngp import BaseTrainer, init_dloader_random
 from .regularization import (
     PlaneTV, HistogramLoss, L1ProposalNetwork, DepthTV, DistortionLoss,
 )
@@ -23,7 +25,7 @@ from plenoxels.ops.lr_scheduling import (
 )
 
 from plenoxels.utils.dist_util import is_main_process
-
+from plenoxels.datasets.base_dataset import BaseDataset
 class PixelSampler:
     def __init__(self, total, batch):
         self.total = total
@@ -37,6 +39,27 @@ class PixelSampler:
             self.ids = torch.LongTensor(np.random.permutation(self.total))
             self.curr = 0
         return self.ids[self.curr:self.curr+self.batch]
+
+# class RayDataset(BaseDataset):
+#     def __init__(self, data_subject, ray_batch_size, split):
+#         super().__init__(
+#             datadir=os.path.dirname(data_subject["triplane_save_path"]),
+#             split=split,
+#             scene_bbox=data_subject["scene_box"],
+#             is_ndc=False,
+#             is_contracted=False,
+#             batch_size=ray_batch_size,
+#             imgs=data_subject["imgs"],
+#             rays_o=data_subject["rays_o"],
+#             rays_d=data_subject["rays_d"],
+#             intrinsics=None,
+#         )
+
+#     def __getitem__(self, index):
+#         out = super().__getitem__(index)
+
+#         return out
+
     
 class StaticTrainer(BaseTrainer):
     def __init__(self,
@@ -169,7 +192,7 @@ class StaticTrainer(BaseTrainer):
                     data_subject = next(subject_iter)
                     self.timer.check("subject-loader-next")
 
-                    trainingSampler = PixelSampler(data_subject["rays_o"].shape[1], self.batch_size)
+                    train_sampler = PixelSampler(data_subject["rays_o"].shape[1], self.batch_size)
             
                     self.latent = data_subject["triplane"]
                     self.latent.requires_grad = True
@@ -184,7 +207,7 @@ class StaticTrainer(BaseTrainer):
                         # self.model.step_before_iter(step_ray) # must after latent loaded
                         self.global_step += 1
                         data_ray = {}
-                        indexes_ray = trainingSampler.nextids()
+                        indexes_ray = train_sampler.nextids()
                         data_ray["rays_o"] = data_subject["rays_o"][:, indexes_ray, :]
                         data_ray["rays_d"] = data_subject["rays_d"][:, indexes_ray, :]
                         data_ray["imgs"] = data_subject["imgs"][:, indexes_ray, :]
