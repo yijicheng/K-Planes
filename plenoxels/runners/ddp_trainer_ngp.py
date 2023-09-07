@@ -4,7 +4,7 @@ import logging as log
 import math
 import os
 from copy import copy
-from typing import Iterable, Optional, Union, Dict, Tuple, Sequence, MutableMapping
+from typing import Iterable, Optional, Union, Dict, Tuple, Sequence, MutableMapping, cast
 
 import numpy as np
 import torch
@@ -22,6 +22,20 @@ from plenoxels.ops.lr_scheduling import (
     get_cosine_schedule_with_warmup, get_step_schedule_with_warmup
 )
 
+from plenoxels.utils import dist_util
+from plenoxels.utils.dist_util import check_main_thread
+from mpi4py import MPI
+import torch.distributed as dist
+from torch.nn.parallel.distributed import DistributedDataParallel as DDP
+
+def module_wrapper(ddp_or_model: Union[DDP, torch.nn.Module]) -> torch.nn.Module:
+    """
+    If DDP, then return the .module. Otherwise, return the model.
+    """
+    if isinstance(ddp_or_model, DDP):
+        return cast(torch.nn.Module, ddp_or_model.module)
+    return ddp_or_model
+
 
 class BaseTrainer(abc.ABC):
     def __init__(self,
@@ -33,7 +47,7 @@ class BaseTrainer(abc.ABC):
                  save_every: int,
                  valid_every: int,
                  save_outputs: bool,
-                 device: Union[str, torch.device],
+                #  device: Union[str, torch.device],
                  **kwargs):
         self.train_data_loader = train_data_loader
         self.num_steps = num_steps
@@ -41,7 +55,7 @@ class BaseTrainer(abc.ABC):
         self.save_every = save_every
         self.valid_every = valid_every
         self.save_outputs = save_outputs
-        self.device = device
+        self.device = dist_util.dev()
         self.eval_batch_size = kwargs.get('eval_batch_size', 8129)
         self.extra_args = kwargs
         self.timer = CudaTimer(enabled=False)
@@ -53,7 +67,7 @@ class BaseTrainer(abc.ABC):
         self.global_step: Optional[int] = None
         self.loss_info: Optional[Dict[str, EMA]] = None
 
-        self.model = self.init_model(**self.extra_args)
+        self._model = self.init_model(**self.extra_args)
         self.optimizer = self.init_optim(**self.extra_args)
         self.scheduler = self.init_lr_scheduler(**self.extra_args)
         self.criterion = torch.nn.MSELoss(reduction='mean')
@@ -61,6 +75,19 @@ class BaseTrainer(abc.ABC):
         self.gscaler = torch.cuda.amp.GradScaler(enabled=self.train_fp16)
 
         self.model.to(self.device)
+        self._model = DDP(
+            self._model,
+            device_ids=[self.device],
+            output_device=self.device,
+            broadcast_buffers=False,
+            bucket_cap_mb=128,
+            find_unused_parameters=False,
+        )
+
+    @property
+    def model(self):
+        """Returns the unwrapped model if in ddp"""
+        return module_wrapper(self._model)
 
     @abc.abstractmethod
     def eval_step(self, data, **kwargs) -> MutableMapping[str, torch.Tensor]:
@@ -281,7 +308,8 @@ class BaseTrainer(abc.ABC):
     @abc.abstractmethod
     def validate(self):
         pass
-
+    
+    @check_main_thread
     def report_test_metrics(self, scene_metrics: Dict[str, Sequence[float]], extra_name: Optional[str]):
         log_text = f"step {self.global_step}/{self.num_steps}"
         if extra_name is not None:
@@ -304,6 +332,7 @@ class BaseTrainer(abc.ABC):
             "global_step": self.global_step
         }
 
+    @check_main_thread
     def save_model(self):
         model_fname = os.path.join(self.log_dir, f'model.pth')
         log.info(f'Saving model checkpoint to: {model_fname}')
