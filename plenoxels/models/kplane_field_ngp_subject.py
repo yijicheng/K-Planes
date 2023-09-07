@@ -58,7 +58,7 @@ def load_grid_param(
     has_time_planes = in_dim == 4
     assert grid_nd <= in_dim
     coo_combs = list(itertools.combinations(range(in_dim), grid_nd))
-    grid_coefs = nn.ParameterList()
+    grid_coefs = []
     for ci, coo_comb in enumerate(coo_combs):
         new_grid_coef = latent_chunk[ci]
         # new_grid_coef = nn.Parameter(torch.empty(
@@ -149,7 +149,7 @@ class GridsGenerator(torch.nn.Module):
             else:
                 feature_dim = gp[-1].shape[1]
             grids.append(gp)
-        log.info(f"Initialized model grids: {grids}")
+        # log.info(f"Initialized model grids: {len(grids[0])} x {grids[0][0].shape}")
 
         return grids, feature_dim
 
@@ -400,7 +400,7 @@ class KPlaneField(nn.Module):
         return {"rgb": rgb, "density": density}
 
     def get_params(self):
-        field_params = {k: v for k, v in self.grids.named_parameters(prefix="grids")}
+        # field_params = {k: v for k, v in self.grids.named_parameters(prefix="grids")}
         nn_params = [
             self.sigma_net.named_parameters(prefix="sigma_net"),
             self.direction_encoder.named_parameters(prefix="direction_encoder"),
@@ -411,10 +411,10 @@ class KPlaneField(nn.Module):
             nn_params.append(self.color_net.named_parameters(prefix="color_net"))
         nn_params = {k: v for plist in nn_params for k, v in plist}
         other_params = {k: v for k, v in self.named_parameters() if (
-            k not in nn_params.keys() and k not in field_params.keys()
+            k not in nn_params.keys() # and k not in field_params.keys()
         )}
         return {
             "nn": list(nn_params.values()),
-            "field": list(field_params.values()),
+            # "field": list(field_params.values()),
             "other": list(other_params.values()),
         }

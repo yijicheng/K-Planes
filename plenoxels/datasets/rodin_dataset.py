@@ -21,7 +21,6 @@ class RodinDataset(BaseDataset):
                  batch_size: Optional[int] = None,
                  downsample: float = 1.0,
                  max_frames: Optional[int] = None):
-        self.name = os.path.basename(datadir)
         self.savedir = savedir
         self.downsample = downsample
         self.max_frames = max_frames
@@ -42,7 +41,6 @@ class RodinDataset(BaseDataset):
             intrinsics = load_360_intrinsics(
                 transform, img_h=imgs[0].shape[0], img_w=imgs[0].shape[1],
                 downsample=self.downsample)
-            
         rays_o, rays_d, imgs = create_360_rays(
             imgs, poses, merge_all=split == 'train', intrinsics=intrinsics)
         super().__init__(
@@ -80,18 +78,18 @@ class RodinDataset(BaseDataset):
         out["near_fars"] = torch.tensor([[2.0, 6.0]])
 
 
-        # triplane
-        triplane_path = os.path.join(self.savedir, self.name + '.npy')
-        if os.path.exists(triplane_path):
-            with open(triplane_path, 'rb') as f:
-                triplane = np.load(f)
-                triplane = torch.as_tensor(triplane)
-        else:
-            triplane = 0.1 * torch.randn((1, 3 * 32 * 512 * 512))
+        # # triplane
+        # triplane_path = os.path.join(self.savedir, self.name + '.npy')
+        # if os.path.exists(triplane_path):
+        #     with open(triplane_path, 'rb') as f:
+        #         triplane = np.load(f)
+        #         triplane = torch.as_tensor(triplane)
+        # else:
+        #     triplane = 0.1 * torch.randn((1, 3 * 32 * 512 * 512))
 
-        triplane_save_path = os.path.join(self.savedir, self.name + '.npy')
-        out["triplane"] = triplane
-        out["triplane_save_path"] = triplane_save_path
+        # triplane_save_path = os.path.join(self.savedir, self.name + '.npy')
+        # out["triplane"] = triplane
+        # out["triplane_save_path"] = triplane_save_path
         return out
 
 
@@ -134,7 +132,8 @@ def load_360_frames(datadir, split, max_frames: int) -> Tuple[Any, Any]:
 
         # Subsample frames
         if split == 'train':
-            frame_ids = np.arange(300-max_frames, max_frames)
+            frame_ids = np.arange(300-max_frames, 300)
+
         elif split == 'test':
             frame_ids = np.arange(max_frames)
         else:

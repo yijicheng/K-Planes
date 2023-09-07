@@ -184,6 +184,7 @@ def parallel_load_images(tqdm_title,
         max_threads = 8
     elif dset_type == 'rodin' or dset_type == 'rodin_subject':
         fn = _parallel_loader_rodin_image_pose
+        max_threads = 32
     else:
         raise ValueError(dset_type)
     p = Pool(min(max_threads, num_images))

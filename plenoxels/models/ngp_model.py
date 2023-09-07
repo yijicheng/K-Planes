@@ -115,10 +115,11 @@ class NGPModel(nn.Module):
         )
 
     def step_before_iter(self, step):
-        self.occupancy_grid.update_every_n_steps(
-            step=step,
-            occ_eval_fn=lambda x: self.field.density_fn(x) * self.render_step_size,
-        )
+        if self.training:
+            self.occupancy_grid.update_every_n_steps(
+                step=step,
+                occ_eval_fn=lambda x: self.field.density_fn(x) * self.render_step_size,
+            )
 
     def step_after_iter(self, step):
         pass

@@ -6,9 +6,9 @@ import pprint
 import sys
 from typing import List, Dict, Any
 import tempfile
+import datetime
 
 import numpy as np
-from .utils.dist_util import setup_dist
 
 def get_freer_gpu():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -36,6 +36,7 @@ from plenoxels.runners import static_trainer_ngp
 from plenoxels.runners import subject_trainer_ngp
 from plenoxels.utils.create_rendering import render_to_path, decompose_space_time
 from plenoxels.utils.parse_args import parse_optfloat
+from plenoxels.utils.dist_util import setup_dist
 
 
 def setup_logging(log_level=logging.INFO):
@@ -157,14 +158,16 @@ def main():
     if validate_only and spacetime_only:
         raise ValueError("validate_only and spacetime_only are mutually exclusive.")
 
+    config["run_time"] = datetime.datetime.now().strftime("-%Y%m%d-%H%M%S")
+
     pprint.pprint(config)
     if validate_only or render_only:
         assert args.log_dir is not None and os.path.isdir(args.log_dir)
     else:
         save_config(config)
 
-    if args.ddp == 1:
-        setup_dist() 
+    # if args.ddp == 1:
+    #     setup_dist() 
 
     data = load_data(model_type, validate_only=validate_only, render_only=render_only or spacetime_only, **config)
     config.update(data)

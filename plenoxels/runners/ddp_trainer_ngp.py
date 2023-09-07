@@ -5,6 +5,7 @@ import math
 import os
 from copy import copy
 from typing import Iterable, Optional, Union, Dict, Tuple, Sequence, MutableMapping, cast
+import datetime
 
 import numpy as np
 import torch
@@ -23,9 +24,6 @@ from plenoxels.ops.lr_scheduling import (
 )
 
 from plenoxels.utils import dist_util
-from plenoxels.utils.dist_util import check_main_thread
-from mpi4py import MPI
-import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 
 def module_wrapper(ddp_or_model: Union[DDP, torch.nn.Module]) -> torch.nn.Module:
@@ -60,7 +58,7 @@ class BaseTrainer(abc.ABC):
         self.extra_args = kwargs
         self.timer = CudaTimer(enabled=False)
 
-        self.log_dir = os.path.join(logdir, expname)
+        self.log_dir = os.path.join(logdir, f'{expname}{kwargs["run_time"]}')
         os.makedirs(self.log_dir, exist_ok=True)
         self.writer = SummaryWriter(log_dir=self.log_dir)
 
@@ -75,17 +73,17 @@ class BaseTrainer(abc.ABC):
         self.gscaler = torch.cuda.amp.GradScaler(enabled=self.train_fp16)
 
         self.model.to(self.device)
-        try:
-            self._model = DDP(
-                self._model,
-                device_ids=[self.device],
-                output_device=self.device,
-                broadcast_buffers=False,
-                bucket_cap_mb=128,
-                find_unused_parameters=False,
-            )
-        except:
-            pass
+        # try:
+        #     self._model = DDP(
+        #         self._model,
+        #         device_ids=[self.device],
+        #         output_device=self.device,
+        #         broadcast_buffers=False,
+        #         bucket_cap_mb=128,
+        #         find_unused_parameters=False,
+        #     )
+        # except:
+        #     pass
 
     @property
     def model(self):
@@ -255,7 +253,9 @@ class BaseTrainer(abc.ABC):
                          img_idx: int,
                          name: Optional[str] = None,
                          save_outputs: bool = True) -> Tuple[dict, np.ndarray, Optional[np.ndarray]]:
-        if isinstance(dset.img_h, int):
+        if isinstance(dset, dict):
+            img_h, img_w = dset['img_h'], dset['img_w']
+        elif isinstance(dset.img_h, int):
             img_h, img_w = dset.img_h, dset.img_w
         else:
             img_h, img_w = dset.img_h[img_idx], dset.img_w[img_idx]
@@ -312,7 +312,6 @@ class BaseTrainer(abc.ABC):
     def validate(self):
         pass
     
-    @check_main_thread
     def report_test_metrics(self, scene_metrics: Dict[str, Sequence[float]], extra_name: Optional[str]):
         log_text = f"step {self.global_step}/{self.num_steps}"
         if extra_name is not None:
@@ -335,7 +334,6 @@ class BaseTrainer(abc.ABC):
             "global_step": self.global_step
         }
 
-    @check_main_thread
     def save_model(self):
         model_fname = os.path.join(self.log_dir, f'model.pth')
         log.info(f'Saving model checkpoint to: {model_fname}')
@@ -400,10 +398,11 @@ class BaseTrainer(abc.ABC):
 
     def init_optim(self, **kwargs) -> torch.optim.Optimizer:
         optim_type = kwargs['optim_type']
+        optim = None
         if optim_type == 'adam':
             optim = torch.optim.Adam(params=self.model.get_params(kwargs['lr']), eps=1e-15)
-        else:
-            raise NotImplementedError()
+        # else:
+            # raise NotImplementedError()
         return optim
 
     @abc.abstractmethod

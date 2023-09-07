@@ -83,6 +83,9 @@ class StaticTrainer(BaseTrainer):
         self.num_epochs = kwargs['num_epochs']
         self.batch_size = kwargs['batch_size']
         self.finetune_mlp = kwargs['finetune_mlp']
+        if not self.finetune_mlp:
+            kwargs["optim_type"] = None
+            kwargs['scheduler_type'] = None
 
         super().__init__(
             train_data_loader=tr_loader,
@@ -104,20 +107,21 @@ class StaticTrainer(BaseTrainer):
         """
         super().eval_step(data, **kwargs)
         batch_size = self.eval_batch_size
-        channels = {"rgb", "depth", "proposal_depth"}
+        channels = {"rgb", "depth"}
         with torch.cuda.amp.autocast(enabled=self.train_fp16), torch.no_grad():
+            latent = data["latent"]# .to(self.device)
             rays_o = data["rays_o"]
             rays_d = data["rays_d"]
             # near_far and bg_color are constant over mini-batches
-            near_far = data["near_fars"].to(self.device)
+            near_far = data["near_fars"]# .to(self.device)
             bg_color = data["bg_color"]
             if isinstance(bg_color, torch.Tensor):
                 bg_color = bg_color.to(self.device)
             preds = defaultdict(list)
             for b in range(math.ceil(rays_o.shape[0] / batch_size)):
-                rays_o_b = rays_o[b * batch_size: (b + 1) * batch_size].to(self.device)
-                rays_d_b = rays_d[b * batch_size: (b + 1) * batch_size].to(self.device)
-                outputs = self.model(rays_o_b, rays_d_b, near_far=near_far,
+                rays_o_b = rays_o[b * batch_size: (b + 1) * batch_size]# .to(self.device)
+                rays_d_b = rays_d[b * batch_size: (b + 1) * batch_size]# .to(self.device)
+                outputs = self.model(latent, rays_o_b, rays_d_b, step_ray=None, near_far=near_far,
                                      bg_color=bg_color)
                 for k, v in outputs.items():
                     if k in channels or "depth" in k:
@@ -126,17 +130,18 @@ class StaticTrainer(BaseTrainer):
 
     def train_step(self, data, **kwargs) -> bool:
         self.model.train()
-        data = self._move_data_to_device(data)
+        # data = self._move_data_to_device(data)
         if "timestamps" not in data:
             data["timestamps"] = None
         self.timer.check("move-to-device")
 
         with torch.cuda.amp.autocast(enabled=self.train_fp16):
             fwd_out = self.model(
-                data['rays_o'], data['rays_d'], bg_color=data['bg_color'],
-                near_far=data['near_fars'], timestamps=data['timestamps'])
+                data["latent"], data['rays_o'], data['rays_d'], data["step_ray"], 
+                bg_color=data['bg_color'], near_far=data['near_fars'], timestamps=data['timestamps'])
             self.timer.check("model-forward")
             # Reconstruction loss
+
             recon_loss = self.criterion(fwd_out['rgb'], data['imgs'])
             # Regularization
             loss = recon_loss
@@ -179,10 +184,9 @@ class StaticTrainer(BaseTrainer):
         """Override this if some very specific training procedure is needed."""
         if self.global_step is None:
             self.global_step = 0
-        for epoch in self.num_epochs:
-            log.info(f"Starting training from step {self.global_step + 1}, epoch {epoch}")
-            
-            pb_epoch = tqdm(initial=0, total=len(self.train_dataset), desc=f"Epoch {epoch}: ")
+        for epoch in range(self.num_epochs):
+            log.info(f"Starting training from step {self.global_step + 1}, epoch {epoch+1}")
+            pb_epoch = tqdm(initial=0, total=len(self.train_dataset)*(self.num_steps-1), desc=f"Epoch {epoch+1}")
             try:
                 self.pre_epoch()
                 subject_iter = iter(self.train_data_loader)
@@ -191,26 +195,26 @@ class StaticTrainer(BaseTrainer):
                     self.timer.reset()
                     data_subject = next(subject_iter)
                     self.timer.check("subject-loader-next")
+                    train_sampler = PixelSampler(data_subject["rays_o"].shape[0], self.batch_size)
+                    data_subject = self._move_data_to_device(data_subject)
 
-                    train_sampler = PixelSampler(data_subject["rays_o"].shape[1], self.batch_size)
-            
-                    self.latent = data_subject["triplane"]
+                    self.subject_index = data_subject["subject_index"]
+                    self.latent = data_subject["triplane"].to(self.device)
                     self.latent.requires_grad = True
-                    self.triplane_save_dir = data_subject["triplane_save_path"]
-                    self.optimizer_triplane = self.init_optim_triplane()
-                    self.scheduler_triplane = self.init_lr_scheduler_triplane()
+                    self.triplane_save_path = data_subject["triplane_save_path"]
+                    self.optimizer_triplane = self.init_optim_triplane(**self.extra_args)
+                    self.scheduler_triplane = self.init_lr_scheduler_triplane(**self.extra_args)
+
                     self.timer.check("subject-loop-init")
  
-
                     for step_ray in range(self.num_steps):
                         self.timer.reset()
-                        # self.model.step_before_iter(step_ray) # must after latent loaded
                         self.global_step += 1
                         data_ray = {}
                         indexes_ray = train_sampler.nextids()
-                        data_ray["rays_o"] = data_subject["rays_o"][:, indexes_ray, :]
-                        data_ray["rays_d"] = data_subject["rays_d"][:, indexes_ray, :]
-                        data_ray["imgs"] = data_subject["imgs"][:, indexes_ray, :]
+                        data_ray["rays_o"] = data_subject["rays_o"][indexes_ray, :]
+                        data_ray["rays_d"] = data_subject["rays_d"][indexes_ray, :]
+                        data_ray["imgs"] = data_subject["imgs"][indexes_ray, :]
                         data_ray["near_fars"] = data_subject["near_fars"]
                         data_ray["bg_color"] = data_subject["bg_color"]
                         data_ray["latent"] = self.latent
@@ -218,31 +222,39 @@ class StaticTrainer(BaseTrainer):
                         self.timer.check("ray-loader-next")
                         step_successful = self.train_step(data_ray)
 
-                        if step_successful and self.scheduler is not None:
-                            self.scheduler_triplane.step()
-                            if self.finetune_mlp:
-                                self.scheduler.step()
+                        if step_successful:
+                            if self.scheduler_triplane is not None:
+                                self.scheduler_triplane.step()
+                            if self.finetune_mlp and self.scheduler is not None:
+                                self.scheduler.step()      
                         for r in self.regularizers:
                             r.step(self.global_step)
                         self.post_step(progress_bar=pb_epoch)
                         self.timer.check("after-ray-loop")
+                        if torch.cuda.memory_reserved() / (1024**2) > 20000:
+                            torch.cuda.empty_cache()
             finally:
                 pb_epoch.close()
             self.writer.close()
 
-    def _move_data_to_device(self, data):
-        super()._move_data_to_device(data)
-        data["latent"] = data["latent"].to(self.device)
-
     @torch.no_grad()
     def validate(self):
-        dataset = self.test_dataset
+        dataset_subject = self.test_dataset.__getitem__(self.subject_index)
         per_scene_metrics = defaultdict(list)
-        pb = tqdm(total=len(dataset), desc=f"Test scene {dataset.name}")
-        for img_idx, data in enumerate(dataset):
-            ts_render = self.eval_step(data)
+        pb = tqdm(total=self.test_dataset.max_frames, desc=f"Test scene {self.test_dataset.name}")
+        dataset_subject = self._move_data_to_device(dataset_subject)
+        dataset_subject["triplane"] = dataset_subject["triplane"].to(self.device)
+        for img_idx in range(self.test_dataset.max_frames):
+            data_img = {}
+            data_img["latent"] = dataset_subject["triplane"]
+            data_img["rays_o"] = dataset_subject["rays_o"][img_idx]
+            data_img["rays_d"] = dataset_subject["rays_d"][img_idx]
+            data_img["imgs"] = dataset_subject["imgs"][img_idx]
+            data_img["near_fars"] = dataset_subject["near_fars"]
+            data_img["bg_color"] = dataset_subject["bg_color"]
+            ts_render = self.eval_step(data_img)
             out_metrics, _, _ = self.evaluate_metrics(
-                data["imgs"], ts_render, dset=dataset, img_idx=img_idx,
+                data_img["imgs"], ts_render, dset=dataset_subject, img_idx=img_idx,
                 name=None, save_outputs=self.save_outputs)
             for k, v in out_metrics.items():
                 per_scene_metrics[k].append(v)
@@ -264,7 +276,8 @@ class StaticTrainer(BaseTrainer):
         log.info(f'Saving model checkpoint to: {model_fname}')
         if is_main_process:
             torch.save(self.get_save_dict(), model_fname)
-        torch.save(self.latent.detach().cpu().numpy(), self.triplane_save_dir)
+        log.info(f'Saving triplane to: {self.triplane_save_path}')
+        torch.save(self.latent.detach().cpu(), self.triplane_save_path)
 
     def load_model(self, checkpoint_data, training_needed: bool = True):
         super().load_model(checkpoint_data, training_needed)
@@ -280,7 +293,7 @@ class StaticTrainer(BaseTrainer):
         lr_sched = None
         max_steps = self.num_steps
         scheduler_type = kwargs['scheduler_type_triplane']
-        log.info(f"Initializing LR Scheduler of type {scheduler_type} with "
+        log.info(f"Initializing Triplane LR Scheduler of type {scheduler_type} with "
                  f"{max_steps} maximum steps.")
         if scheduler_type == "cosine":
             lr_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -348,8 +361,8 @@ def decide_dset_type(dd) -> str:
           or "horns" in dd or "leaves" in dd or "orchids" in dd
           or "room" in dd or "trex" in dd):
         return "llff"
-    elif ("render" in dd and not "subject" in dd):
-        return "rodin"
+    elif ("render" in dd and "subject" in dd):
+        return "rodin_subject"
     else:
         raise RuntimeError(f"data_dir {dd} not recognized as LLFF or Synthetic dataset.")
 
@@ -374,8 +387,9 @@ def init_tr_data(data_downsample: float, data_dirs: Sequence[str], **kwargs):
     elif dset_type == "rodin_subject":
         max_tr_frames = parse_optint(kwargs.get('max_tr_frames'))
         dset = RodinSubjectDataset(
-            data_dir, split='train', savedir=kwargs['savedir'], downsample=data_downsample,
-            max_frames=max_tr_frames, subject_batch_size=1, num_subjects=kwargs['num_subjects'])
+            data_dir, split='train', savedir=os.path.join(kwargs['logdir'], f"{kwargs['expname']}{kwargs['run_time']}"), rootdir=kwargs['rootdir'],
+            downsample=data_downsample, max_frames=max_tr_frames, 
+            subject_batch_size=1, num_subjects=kwargs['num_subjects'])
     else:
         raise ValueError(f"Dataset type {dset_type} invalid.")
     dset.reset_iter()
@@ -407,8 +421,8 @@ def init_ts_data(data_dirs: Sequence[str], split: str, **kwargs):
     elif dset_type == "rodin_subject":
         max_ts_frames = parse_optint(kwargs.get('max_ts_frames'))
         dset = RodinSubjectDataset(
-            data_dir, split=split, savedir=kwargs['savedir'],
-            downsample=1, max_frames=max_ts_frames, 
+            data_dir, split=split, savedir=os.path.join(kwargs['logdir'], f"{kwargs['expname']}{kwargs['run_time']}"), 
+            rootdir=kwargs['rootdir'], downsample=1, max_frames=max_ts_frames, 
             subject_batch_size=1, num_subjects=kwargs['num_subjects'])
     else:
         raise ValueError(f"Dataset type {dset_type} invalid.")

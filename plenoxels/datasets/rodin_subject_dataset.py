@@ -54,6 +54,7 @@ class RodinSubjectDataset(Dataset):
         else:
             self.num_samples = None
             raise RuntimeError("Can't figure out num_samples.")
+        self.weights_subsampled = weights_subsampled
         self.sampling_weights = sampling_weights
         if self.sampling_weights is not None:
             assert len(self.sampling_weights) == self.num_samples, (
@@ -119,7 +120,7 @@ class RodinSubjectDataset(Dataset):
         else:
             return self.num_samples
 
-    def __getitem__(self, index, return_idxs: bool = False):
+    def __getitem__(self, index):
         if self.split == 'train':
             index = self.get_rand_ids(index) # subject_index
             
@@ -129,17 +130,15 @@ class RodinSubjectDataset(Dataset):
         out = {}
         
         # triplane
-        triplane_path = os.path.join(self.savedir, self.name + '.npy')
+        triplane_path = os.path.join(self.savedir, "triplane", self.name + '.pth')
         if os.path.exists(triplane_path):
-            with open(triplane_path, 'rb') as f:
-                triplane = np.load(f)
-                triplane = torch.as_tensor(triplane)
+            triplane = torch.load(triplane_path)
         else:
+            os.makedirs(os.path.dirname(triplane_path), exist_ok=True)
             triplane = 0.1 * torch.randn((1, 3 * 32 * 512 * 512))
 
-        triplane_save_path = os.path.join(self.savedir, self.name + '.npy')
         out["triplane"] = triplane
-        out["triplane_save_path"] = triplane_save_path
+        out["triplane_save_path"] = triplane_path
 
         # ray
         if self.split == 'render':
@@ -157,9 +156,12 @@ class RodinSubjectDataset(Dataset):
             self.intrinsics = load_360_intrinsics(
                 transform, img_h=imgs[0].shape[0], img_w=imgs[0].shape[1],
                 downsample=self.downsample)
-            
+
+        out["img_h"] = self.intrinsics.height
+        out["img_w"] = self.intrinsics.width
+
         rays_o, rays_d, imgs = create_360_rays(
-            imgs, poses, merge_all=False, intrinsics=self.intrinsics) # [N, H*W, ?]
+            imgs, poses, merge_all=self.split == 'train', intrinsics=self.intrinsics) # [N, H*W, ?]
 
         out["rays_o"] = rays_o
         out["rays_d"] = rays_d
@@ -180,10 +182,9 @@ class RodinSubjectDataset(Dataset):
         out["imgs"] = pixels
         out["bg_color"] = bg_color
         out["near_fars"] = torch.tensor([self.near_far])
-        out["scene_bbox"] = self.scene_bbox.unsqueeze(0)
 
-        if return_idxs:
-            return out, index
+        out["subject_index"] = index
+
         return out
 
 
@@ -222,11 +223,10 @@ def create_360_rays(
 def load_360_frames(datadir, split, max_frames: int) -> Tuple[Any, Any]:
     with open(os.path.join(datadir, f"metadata_000000.json"), 'r') as f:
         meta = json.load(f)['cameras'][0]
-        # frames = meta['frames']
 
         # Subsample frames
         if split == 'train':
-            frame_ids = np.arange(300-max_frames, max_frames)
+            frame_ids = np.arange(300-max_frames, 300)
         elif split == 'test':
             frame_ids = np.arange(max_frames)
         else:

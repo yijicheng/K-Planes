@@ -1,21 +1,21 @@
 config = {
- 'expname': 'rodin_hybrid',
+ 'expname': 'rodin_subject_hybrid',
  'logdir': './logs/rodin',
  'device': 'cuda:0',
 
  'data_downsample': 1.0,
- 'data_dirs': ['/mnt/blob2/render_output_hd/_Alicia_Brown_7BJIB/'],
+ 'data_dirs': ['/mnt/blob2/render_output_hd/subject'],
  'num_subjects': 8,
  'contract': False,
  'ndc': False,
- 'savedir': './logs/rodin/triplane',
+ 'rootdir': '/mnt/blob2/render_output_hd',
  'max_tr_frames': 295,
  'max_ts_frames': 5,
 
  # Optimization settings
- 'num_steps': 30001,
+ 'num_steps': 5001,
  'num_epochs': 30,
- 'batch_size': 4096,
+ 'batch_size': 8196,
  'finetune_mlp': True,
  'optim_type': 'adam',
  'scheduler_type': 'warmup_cosine',
@@ -31,8 +31,8 @@ config = {
 #  'distortion_loss_weight': 0.001,
 
  # Training settings
- 'save_every': 30000,
- 'valid_every': 30000,
+ 'save_every': 5000,
+ 'valid_every': 5000,
  'save_outputs': True,
  'train_fp16': True,
 

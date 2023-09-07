@@ -1,13 +1,12 @@
 config = {
- 'expname': 'rodin_hybrid',
+ 'expname': 'rodin_ngp_hybrid',
  'logdir': './logs/rodin',
  'device': 'cuda:0',
 
  'data_downsample': 1.0,
- 'data_dirs': ['/mnt/blob2/render_output_hd/_Alicia_Brown_7BJIB/'],
+ 'data_dirs': ['./data/rodin/_Alicia_Brown_7BJIB'],
  'contract': False,
  'ndc': False,
- 'savedir': './logs/rodin/triplane',
  'max_tr_frames': 295,
  'max_ts_frames': 5,
 

@@ -148,7 +148,7 @@ def decide_dset_type(dd) -> str:
           or "horns" in dd or "leaves" in dd or "orchids" in dd
           or "room" in dd or "trex" in dd):
         return "llff"
-    elif ("render" in dd and not "subject" in dd):
+    elif (("render" in dd and not "subject" in dd) or "rodin" in dd):
         return "rodin"
     else:
         raise RuntimeError(f"data_dir {dd} not recognized as LLFF or Synthetic dataset.")

@@ -116,10 +116,11 @@ class NGPModel(nn.Module):
 
     def step_before_iter(self, step, latent):
         self.field.get_grids(latent)
-        self.occupancy_grid.update_every_n_steps(
-            step=step,
-            occ_eval_fn=lambda x: self.field.density_fn(x) * self.render_step_size,
-        )
+        if self.training and step is not None:
+            self.occupancy_grid.update_every_n_steps(
+                step=step,
+                occ_eval_fn=lambda x: self.field.density_fn(x) * self.render_step_size,
+            )
 
     def step_after_iter(self, step):
         pass
@@ -174,7 +175,7 @@ class NGPModel(nn.Module):
             accumulation = torch.sum(weights, dim=-2)
         return accumulation
 
-    def forward(self, latent, rays_o, rays_d, bg_color, near_far: torch.Tensor, step_ray, timestamps=None):
+    def forward(self, latent, rays_o, rays_d, step_ray, bg_color, near_far: torch.Tensor, timestamps=None):
         """
         rays_o : [batch, 3]
         rays_d : [batch, 3]
@@ -246,11 +247,11 @@ class NGPModel(nn.Module):
     def get_params(self, lr: float):
         model_params = self.field.get_params()
         # pn_params = [pn.get_params() for pn in self.proposal_networks]
-        field_params = model_params["field"] # + [p for pnp in pn_params for p in pnp["field"]]
+        # field_params = model_params["field"] # + [p for pnp in pn_params for p in pnp["field"]]
         nn_params = model_params["nn"] # + [p for pnp in pn_params for p in pnp["nn"]]
         other_params = model_params["other"] # + [p for pnp in pn_params for p in pnp["other"]]
         return [
-            {"params": field_params, "lr": lr},
+            # {"params": field_params, "lr": lr},
             {"params": nn_params, "lr": lr},
             {"params": other_params, "lr": lr},
         ]
